@@ -1,0 +1,549 @@
+install.packages("shiny")
+library(shiny)
+install.packages("shinydashboard")
+library(shinydashboard)
+install.packages("shinydashboardPlus")
+library(shinydashboardPlus)
+install.packages("shinyjs")
+library(shinyjs)
+
+library(dplyr)
+library(ggplot2)
+library(jsonlite)
+library(zoo)
+library(corrplot)
+library(tidyr)
+
+useShinyjs()
+
+ui <- dashboardPage(
+  dashboardHeader(title = "Analiza Metryki BSP"),
+  dashboardSidebar(
+    # dodanie menu bocznego
+    width = 350,
+    sidebarMenu(
+      menuItem("Opis Metryki BSP", tabName = "bsp"),
+      menuItem("Struktóra Danych", tabName = "data_structure"),
+      menuItem("Korelacja BSP i Ceny", tabName = "bsp_correlation",
+               badgeLabel = "Wykres", badgeColor = "red"),
+      menuItem("Wartości Minimalne z zakresu", tabName = "bsp_min",
+               badgeLabel = "Wykres", badgeColor = "red"),
+      menuItem("Opis Strategii Decyzyjności", tabName = "strategy",
+               badgeLabel = "Analiza", badgeColor = "olive"),
+      menuItem("Konfiguracja i Wyniki Testu", tabName = "result",
+               badgeLabel = "Wyniki", badgeColor = "light-blue")
+    ),
+    selectInput(
+      'ticker', p("Wybierz ticker giełdowy"),
+      choices = c("TAOUSDT", "BNBUSDT", "ETHUSDT", "BTCUSDT"), 
+      multiple = FALSE, selected = "TAOUSDT"
+    )
+  ),
+  dashboardBody(
+    # Boxes powinny być w wierszach lub kolumnach
+    tags$head(
+      tags$style(HTML("
+        .row {
+          margin-right: 0px;
+          margin-left: 0px;
+        }
+      "))
+    ),
+    fluidRow(
+      tabItems(
+        tabItem(tabName = "bsp",
+                h2("Matryka BSP"),
+                br(),
+                p("Z racji iż na codzień oboje programujemy zawodowo i jeden z nas tworzy narzędzia dla inwestorów kryptowalut, mamy dostęp do naszych własnych metryk, które tworzymy."),
+                p("Chcemy zbadać i pokazać możliwości metryki nazwanej bsp (Buy Sell Pressure - Wskaźnik presji zakupowo-sprzedażowej)."),
+                p("Metryka ta pokazuje wartości od -1 do 1, gdzie wartość 0 jest wartością neutralną. Wartości powyżej 0 wskazują na zwiększoną presję sprzedażową, a wartości poniżej 0 na zwiększoną presję zakupową. Metryka ta na pierwszy rzut oka przypomina kształtem i zachowaniem wskaźnik RSI, jednak jest od niego dużo precyzyjniejsza, ponieważ nie analizuje ona ceny coina, tylko dane zakupowo sprzedażowe w czasie rzeczywistym.
+Pomaga identyfikować możliwe punkty zwrotne na rynku, najlepsze momenty do sprzedaży, gdy metryka jest skrajnie wysoko, oraz do zakupów, gdy metryka jest skrajnie nisko."),
+                strong("Uzyskaliśmy zgodę na użycie tych danych, jednak nie chcemy, aby potem były one rozprowadzane."),
+                br(),
+                # img(
+                #   src = "/result.jpg", # ścieżka do obrazka
+                #   # height = "300px", # wysokość obrazka
+                #   width = "100%", # szerokość obrazka
+                #   style = "display: block; margin-left: auto; margin-right: auto; margin-top: 20px;"
+                # )
+        ),
+        tabItem(tabName = "data_structure",
+                h2("Kolumny"),
+                br(),
+                h4("Opis kolumn jakie zawierają dane"),
+                strong("ts"),
+                p("Jest to zmienna względem której posortowane są wszystkie wiersze od najstarszych do najnowszych. Nazwa ts jest skrótem do nazwy timestamp, czyli czasu podanego w sekundach jaki minął od 1 stycznia 1970r. godziny 00:00 UTC. do danego momentu."),
+                strong("ob_"),
+                p("Wszystkie zmienne zaczynające się od ob_ dotyczą naszej własnej metryki bsp. Jest ona wyliczana na podstawie aktualnie otworzonych zleceń na giełdach. Są one agregowane na żywo i wykorzystując specjalną formułę wyliczana jest np. metryka ob_10_p_o, która pokazuje stosunek między presją kupna a sprzedaży Bitcoina w zakresie 5% danych od obecnego poziomu ceny. Końcówki o/h/l/c pochodzą od tz. świec OHLC, które są użwyane do tworzenia wykresów. Każda litera to skrót do angielskiej nazwy"),
+                tags$ul(
+                  tags$li("open (pierwsza cena aktywa, gdy tworzona jest nowa świeca, w tym przypadku pierwsza cena w każdej minucie)"),
+                  tags$li("high (najwyższa cena w danej świecy, czyli najwyższa cena uzyskana przez minutę)"),
+                  tags$li("low (najniższa cena)"),
+                  tags$li("close (ostatnia cena przed rozpoczęciem nowej świecy)."),
+                ),
+                strong("h"),
+                p("Jest to także wartość ze świecy OHLC ceny tickera, czyli najwyższa wartość w ciągu minuty - najwyższa cena."),
+                strong("l"),
+                p("Low świecy ceny."),
+                br(),
+                h4("Statystyki opisowe danych"),
+                verbatimTextOutput("data_str"),  # Wyświetlenie struktury danych
+                br(),
+                h4("Podsumowanie danych"),
+                verbatimTextOutput("data_summary")  # Wyświetlenie podsumowania danych
+        ),
+        tabItem(tabName = "bsp_correlation",
+                h2("Korelacja metryki BSP i Ceny"),
+                br(),
+                plotOutput("corr_plot", height = 550, width = 450)
+        ),
+        tabItem(tabName = "bsp_min",
+                h2("Wartości Minimalne z zakresu"),
+                br(),
+                selectInput(
+                  'time_range', p("Zakres czasu w minutach"),
+                  choices = c(500, 750, 1000, 1300, 1600, 2000, 2300, 2600, 3000, 3400, 3800, 4200, 4800, 5500), 
+                  multiple = FALSE, selected = 1000
+                ),
+                br(),
+                h4("Wykres metryki BSP i wartości minimum z danego zakresu"),
+                plotOutput("plot_bsp_min"),
+                br(),
+                h4("Punkty przecięcia metryki BSP z wartościami minimum"),
+                plotOutput("plot_points")
+        ),
+        tabItem(tabName = "strategy",
+                h2("Opis Strategii Decyzyjności"),
+                br(),
+                p("Podejrzewamy, że dzięki metryce bsp można stworzyć system do handlowania na giełdzie, który przyniesie zyski."),
+                p("Analizując wykresy, myślimy, że gdy wartość metryki drastycznie spada (czyli wskazuje na rosnącą presję zakupową), cena po pewnej chwili w większości przypadków zaczyna rosnąć."),
+                p("By sprawdzić tą tezę, wykonamy teraz szereg działań i obliczeń mających na celu obalić bądź potwierdzić nasze przypusczenia."),
+                br(),
+                h4("Konfigurator testów znajduje się w ostatniej sekcji 'Konfiguracja i Wyniki Testu'"),
+                p("Do przeprowadzenia symulacji i uzyskania wyniku, który potwierdzi bądź obali postawioną tezę potrzebne są funkcje pomocnicze, które"),
+                p("pomogą obliczyć % zmiany między punktami kupna i sprzedaży"),
+                p("wyzanczą momenty sprzedaży za pomocą trailing stop loss (tsl) - czyli metody, gdzie wywołaniem do sprzedaży jest momenty gdy cena spadnie o x % względem najwyszej ceny jaka wystąpilą po kupnie lub spadnie o x % względem ceny kupna."),
+                p("Dokładniejszy opis parametrów odpowiedzialnych za wyszukanie potencjalnych miejsc zakupu znajduje się w ostatniej sekcji 'Konfiguracja i Wyniki Testu'")
+        ),
+        tabItem(tabName = "result",
+                h2("Konfiguracja i Wyniki Testu"),
+                br(),
+                selectInput(
+                  'past_minutes_percentage', p("Zakres liczenia zaminy ceny % (minuty)"),
+                  choices = c(0, 10, 30, 60, 90, 120, 150, 200, 240, 300, 360, 400, 500), 
+                  multiple = FALSE, selected = 120
+                ),
+                p("Określa na jakim zakresie ma być liczona procentowa zmiana ceny."),
+                
+                selectInput(
+                  'past_percentage_min_dropdown', p("Minimalny procentowy spadek ceny"),
+                  choices = c(-7, -6, -5, -4, -3, -2.5, -2, -1.5, -1, -0.5, 0), 
+                  multiple = FALSE, selected = -2.5
+                ),
+                p("Określa minimalny procentowy spadek ceny w przeszłości wymagany do podjęcia decyzji o kupnie."),
+                
+                selectInput(
+                  'Y_trail_profit', p("Kroczący stop loss"),
+                  choices = c(10, 9, 8, 7, 6, 5, 4, 3, 2.5, 2, 1.5, 1, 0.5, 0), 
+                  multiple = FALSE, selected = 5
+                ),
+                p("Określa wartość kroczącego stop lossa, czyli przy jakim % spadku od maksymalnie uzyskanej ceny pozycja ma być sprzedana. Pozwala to zabezpieczyć zyski na wypadek spadków."),
+                
+                selectInput(
+                  'Y_stop_loss', p("Stop loss"),
+                  choices = c(10, 9, 8, 7, 6, 5, 4, 3, 2.5, 2, 1.5, 1, 0.5, 0), 
+                  multiple = FALSE, selected = 10
+                ),
+                p("Określa poziom straty %, przy którym następuje automatyczne zamknięcie pozycji."),
+                
+                selectInput(
+                  'Y_trail_fixed_profit', p("Sztywny zysk"),
+                  choices = c(15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2.5, 2, 1.5, 1, 0.5, 0), 
+                  multiple = FALSE, selected = 6
+                ),
+                p("Określa poziom zysku %, przy którym następuje automatyczne zamknięcie pozycji."),
+                
+                checkboxInput(
+                  'use_avg_price', label = p("Użyj średnią cenę do obliczeń"), 
+                  value = FALSE
+                ),
+                p("Określa czy do obliczeń ma być wykorzystana średnia cena akrywa."),
+                actionButton("run_simulation", "Oblicz"),
+                plotOutput("result_chart"),
+                textOutput("transactions_cumulative_result_paragraph")
+                # tableOutput("transactions_table")
+        )
+      )
+    )
+  )
+)
+
+calculate_percentage_change <- function(current_price, past_price) {
+  return((current_price - past_price) / past_price * 100)
+}
+
+calculate_trailing_exit <- function(entry_price, prices, trailing_stop_loss, stop_loss, fixed_profit) {
+  max_price <- entry_price
+  for (price in prices) {
+    if (price > max_price) {
+      max_price <- price
+    }
+    
+    if (fixed_profit != 0 && price >= entry_price * (1 + fixed_profit / 100)) {
+      return(list(price = price, stop_loss_hit = FALSE))
+    }
+    
+    # Sprawdzenie, czy pozycja jest w zysku, tylko wtedy powinien zadziałać tsl (cena > entry_price)
+    if (price > entry_price) {
+      # Sprawdzenie trailing stop loss (działa tylko jeśli pozycja jest na plusie)
+      if (price <= max_price * (1 - trailing_stop_loss / 100)) {
+        return(list(price = price, stop_loss_hit = FALSE))
+      }
+    }
+    
+    # Sprawdzenie sztywnego stop loss (jeśli cena spadnie poniżej entry_price * (1 - stop_loss / 100))
+    if (price <= entry_price * (1 - stop_loss / 100)) {
+      return(list(price = entry_price * (1 - stop_loss / 100), stop_loss_hit = TRUE))
+    }
+  }
+  
+  return(list(price = tail(prices, 1), stop_loss_hit = FALSE))
+}
+
+trade_simulation <- function(
+    points_below_min,
+    data_clean,
+    past_minutes_percentage = 0,
+    past_percentage_min_dropdown = 0,
+    Y_trail_profit = 3,
+    Y_stop_loss = 5,
+    Y_trail_fixed_profit = 0,
+    use_avg_price = FALSE,
+    session = NULL
+) {
+  rows_amount <- nrow(points_below_min)
+  
+  if (!is.null(session)) {
+    progress <- shiny::Progress$new(session, min = 1, max = rows_amount)
+    on.exit(progress$close()) # Ensure the progress bar closes on exit
+    progress$set(message = "Procesowanie danych", detail = "Proszę czekać...")
+  }
+  
+  # Utworzenie nowej tabeli do przechowywania transakcji kupna i sprzedaży
+  transactions <- data.frame(
+    ts = integer(), # timestamp momentu kupna
+    price = numeric(), # cena w momencei kupna
+    price_change_percent = numeric(), # jaka zmiana ceny była przed kupnem (na przestrzeni parametru podanego, czyli np jaki % zmiany ceny był patrząc X minut wstecz od momentu kupna)
+    ts_exit_tsl = integer(), # timestamp momentu sprzedaży z użyciem tsl
+    price_exit_tsl = numeric(), # cena przy sprzedaży za pomocą tsl
+    result_tsl = numeric(), # osiągniety zysk/strata przy pomocy tsl
+    stop_loss_tsl = logical(), # informacja czy sprzedaż nastąpiła po osiągnięciu sl dla 1 spoosbu sprzedaży
+    cumulative_result_tsl = numeric(), # kumulatywny zysk z tsl
+    stringsAsFactors = FALSE
+  )
+  
+  # Inicjalizacja zmiennych dla skumulowanych wyników
+  cumulative_result_tsl <- 0
+  
+  # Iteracja przez momenty kupna
+  for (i in 1:rows_amount) {
+    if (!is.null(session)) {
+      progress$set(value = i, detail = paste("Pozycja", i, "z", rows_amount))
+    }
+    
+    entry_ts <- points_below_min$ts[i]
+    
+    # Cena wejścia: średnia lub najniższa cena w zależności od parametru
+    if (use_avg_price) {
+      entry_price <- (points_below_min$l[i] + points_below_min$h[i]) / 2
+    } else {
+      entry_price <- points_below_min$l[i]
+    }
+    
+    # Sprawdzamy opcjonalny warunek spadku ceny, jeśli oba parametry są podane
+    if (past_minutes_percentage != 0 && past_percentage_min_dropdown != 0) {
+      past_ts <- entry_ts - past_minutes_percentage * 60
+      past_prices <- data_clean$h[data_clean$ts >= past_ts & data_clean$ts < entry_ts]
+      max_past_price <- if (length(past_prices) > 0) max(past_prices) else NA
+      
+      # Jeśli maksymalna cena istnieje, obliczamy procentowy spadek
+      if (!is.na(max_past_price)) {
+        drop_percent <- calculate_percentage_change(entry_price, max_past_price)
+        if (drop_percent > past_percentage_min_dropdown) {
+          next  # Pomijamy tę iterację, jeśli warunek spadku ceny nie jest spełniony
+        }
+      }
+    }
+    
+    # Procentowa zmiana ceny
+    past_ts <- entry_ts - past_minutes_percentage * 60  # past_minutes_percentage minut wstecz
+    past_price <- if (use_avg_price) {
+      mean(c(
+        data_clean$l[which.min(abs(data_clean$ts - past_ts))],
+        data_clean$h[which.min(abs(data_clean$ts - past_ts))]
+      ))
+    } else {
+      data_clean$l[which.min(abs(data_clean$ts - past_ts))]
+    }
+    price_change_percent <- calculate_percentage_change(entry_price, past_price)
+    
+    # Ceny po wejściu w pozycję
+    prices_after_entry <- if (use_avg_price) {
+      (data_clean$l[data_clean$ts >= entry_ts] + data_clean$h[data_clean$ts >= entry_ts]) / 2
+    } else {
+      data_clean$h[data_clean$ts >= entry_ts]
+    }
+    
+    # Wyjście przez trailing stop loss
+    trail_exit <- calculate_trailing_exit(entry_price, prices_after_entry, Y_trail_profit, Y_stop_loss, Y_trail_fixed_profit)
+    exit_trail_price <- if (!is.null(trail_exit$price) && !is.na(trail_exit$price)) trail_exit$price else NA
+    stop_loss_tsl <- if (!is.null(trail_exit$stop_loss_hit) && !is.na(trail_exit$stop_loss_hit)) trail_exit$stop_loss_hit else FALSE
+    result_tsl <- if (stop_loss_tsl) -Y_stop_loss else calculate_percentage_change(exit_trail_price, entry_price)
+    
+    # Aktualizacja skumulowanych wyników
+    cumulative_result_tsl <- cumulative_result_tsl + result_tsl
+
+    # Dodanie nowej transakcji do tabeli
+    transactions <- rbind(transactions, data.frame(
+      ts = entry_ts,
+      price = entry_price,
+      price_change_percent = price_change_percent,
+      ts_exit_tsl = ifelse(is.na(exit_trail_price), NA, entry_ts + which.min(abs(prices_after_entry - exit_trail_price)) * 60),
+      price_exit_tsl = exit_trail_price,
+      result_tsl = result_tsl,
+      stop_loss_tsl = stop_loss_tsl,
+      cumulative_result_tsl = cumulative_result_tsl,
+			stringsAsFactors = FALSE
+    ))
+  }
+  
+  # Filtracja nie zakończonych transakcji
+  transactions <- transactions[!is.na(transactions$ts_exit_tsl), ]
+  
+  # Tworzenie tabeli z danymi do wykresu
+  transactions_long <- transactions %>%
+    select(ts, cumulative_result_tsl) %>%
+    gather(key = "Strategy", value = "Cumulative_Result", -ts) %>%
+    mutate(Strategy = recode(Strategy,
+                             "cumulative_result_tsl" = "Strategia TSL"))
+  
+  # Wyświetlenie wykresu skumulowanego zysku dla obu strategii na jednym wykresie
+  result_chart_combined <- ggplot(transactions_long, aes(x = ts, y = Cumulative_Result, color = Strategy)) +
+    geom_line(linewidth = 1) +
+    labs(title = "Skumulowany zysk strategii TSL %",
+         x = "Czas (timestamp)",
+         y = "Skumulowany zysk (%)",
+         color = "") +
+    theme_minimal() +
+    scale_x_continuous(labels = scales::date_format("%H:%M:%S"), breaks = scales::breaks_pretty(n = 10)) +
+    scale_color_manual(values = c("Strategia TSL" = "blue")) +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      legend.position = "bottom"  # Legenda na dole wykresu
+    )
+  
+  # Zwrócenie tabeli transakcji
+  return(list(transactions, result_chart_combined))
+}
+
+
+server <- function(input, output, session) {
+  data_clean <- reactive({
+    # Generowanie ścieżki do pliku na podstawie wybranego tickera
+    file_path <- paste0("./data/data-crypto-", input$ticker, "-1m.json")
+    
+    # Sprawdzenie, czy plik istnieje
+    if (!file.exists(file_path)) {
+      showNotification(paste("Plik nie istnieje:", file_path), type = "error")
+      return(NULL)
+    }
+    
+    # Wczytanie danych JSON
+    tryCatch({
+      data <- fromJSON(file_path)
+      haveNaN <- colSums(is.na(data))
+      haveNaN
+      if (any(haveNaN > 0)) {
+        data <- na.omit(data)
+      }
+      return(data)
+    }, error = function(e) {
+      # Obsługa błędu (np. brak pliku)
+      error_message <- paste("Nie udało się załadować pliku:", file_path, "\nBłąd:", e$message)
+      showNotification(error_message, type = "error")
+      return(NULL)
+    })
+  })
+  
+  # Renderowanie struktury danych
+  output$data_str <- renderPrint({
+    data <- data_clean()  # Pobieramy dane z reaktywnego źródła
+    if (!is.null(data)) {
+      str(data)  # Wyświetlenie struktury danych
+    }
+  })
+  
+  # Renderowanie podsumowania danych
+  output$data_summary <- renderPrint({
+    data <- data_clean()  # Pobieramy dane z reaktywnego źródła
+    if (!is.null(data)) {
+      summary(data)  # Wyświetlenie podsumowania danych
+    }
+  })
+  
+  # Generowanie wykresu korelacji
+  output$corr_plot <- renderPlot({
+    # Użyj data_clean() aby uzyskać dane, a nie tylko data_clean
+    data <- data_clean()  # Pobierz dane z reaktywnego obiektu
+    
+    # Sprawdzenie, czy dane są dostępne
+    if (!is.null(data) && nrow(data) > 0) {
+      # Obliczanie macierzy korelacji
+      cor_matrix <- cor(data[, c("ob_10_p_o", "ob_10_p_h", "ob_10_p_l", "ob_10_p_c", "h", "l")], method = "spearman", use = "complete.obs")
+      cor_matrix <- round(cor_matrix, 2)
+      
+      # Rysowanie wykresu korelacji
+      corrplot(cor_matrix, method = "square", type = "upper", col = colorRampPalette(c("red", "white", "blue"))(200))
+    } else {
+      # Jeśli brak danych, wyświetl komunikat
+      plot(NA, xlim = c(0, 1), ylim = c(0, 1), main = "Brak danych do analizy korelacji", xlab = "", ylab = "")
+      text(0.5, 0.5, "Brak danych", cex = 1.5)
+    }
+  })
+  
+  # Wykres metryki BSP i wartości minimum
+  output$plot_bsp_min <- renderPlot({
+    showModal(modalDialog("Obliczanie: 'Wykres metryki BSP i wartości minimum z danego zakresu'", footer = NULL))
+    
+    # Pobierz dane z data_clean
+    data <- data_clean()
+    time_range <- as.numeric(input$time_range)  # Pobierz wartość time_range z UI
+    
+    # Wyliczenie min_bsp
+    data_clean_updated <- data %>%
+      mutate(min_bsp = rollapply(ob_10_p_l, width = time_range, FUN = min, align = "right", partial = TRUE, na.rm = TRUE))
+    
+    removeModal()  # Usuń spinner po obliczeniach
+    
+    ggplot(data_clean_updated, aes(x = ts)) +
+      geom_line(aes(y = ob_10_p_l, color = "Metryka BSP (ob_10_p_l)")) +
+      geom_line(aes(y = min_bsp, color = "Wartości minimum (min_bsp)"), linetype = "dashed") +
+      scale_color_manual(values = c("Metryka BSP (ob_10_p_l)" = "#4682B4", "Wartości minimum (min_bsp)" = "#DAA520")) +
+      labs(title = "Metryka BSP i wartości minimum", x = "Timestamp", y = "Wartość", color = "") +
+      theme_minimal() +
+      theme(legend.position = "bottom")
+  })
+  
+  # Reaktywna funkcja do generowania punktów minimum
+  points_below_min <- reactive({
+    data <- data_clean()
+    time_range <- as.numeric(input$time_range)
+    
+    # Check if data exists
+    if (is.null(data) || nrow(data) == 0) {
+      return(NULL)
+    }
+    
+    # Calculate min_bsp and identify points below minimum
+    data_with_min_bsp <- data %>%
+      mutate(min_bsp = rollapply(ob_10_p_l, width = time_range, FUN = min, align = "right", partial = TRUE, na.rm = TRUE)) %>%
+      mutate(below_min = ifelse(ob_10_p_l <= min_bsp, TRUE, FALSE))
+    
+		points_below_min_filtered <- data_with_min_bsp %>% filter(below_min)
+    return(points_below_min_filtered)
+  })
+  
+  # Wykrycie punktów poniżej minimum
+  output$plot_points <- renderPlot({
+    showModal(modalDialog("Obliczanie: 'Punkty przecięcia metryki BSP z wartościami minimum'", footer = NULL))
+    
+    # Pobierz dane z points_below_min
+    points_below_min_temp <- points_below_min()
+    
+    # Check if data exists
+    if (is.null(points_below_min_temp) || nrow(points_below_min_temp) == 0) {
+      removeModal()  # Usuń spinner
+      plot(NA, xlim = c(0, 1), ylim = c(0, 1), main = "Brak danych do analizy", xlab = "", ylab = "")
+      text(0.5, 0.5, "Brak danych", cex = 1.5)
+      return()
+    }
+    
+    removeModal()  # Usuń spinner
+    
+    # Wykres punktów przecięcia
+    ggplot(points_below_min_temp, aes(x = ts)) +
+      geom_line(aes(y = ob_10_p_l, color = "Metryka BSP (ob_10_p_l)")) +
+      geom_line(aes(y = min_bsp, color = "Wartości minimum (min_bsp)"), linetype = "dashed") +
+      geom_point(data = points_below_min_temp %>% filter(below_min), 
+                 aes(x = ts, y = ob_10_p_l, color = "Punkty przecięcia"), size = 2) +
+      scale_color_manual(values = c("Metryka BSP (ob_10_p_l)" = "#4682B4", 
+                                    "Wartości minimum (min_bsp)" = "#DAA520", 
+                                    "Punkty przecięcia" = "red")) +
+      labs(title = "Punkty przecięcia metryki BSP z wartościami minimum", 
+           x = "Timestamp", y = "Wartość", color = "") +
+      theme_minimal() +
+      theme(legend.position = "bottom")
+  })
+
+  
+  simulation_result <- eventReactive({
+		input$ticker
+		input$run_simulation
+		}, {
+    data <- data_clean()
+    points_below_min_temp <- points_below_min()
+    
+    # Call the trade_simulation function
+    trade_simulation(
+      points_below_min = points_below_min_temp,
+      data_clean = data,
+      past_minutes_percentage = as.numeric(input$past_minutes_percentage),
+      past_percentage_min_dropdown = as.numeric(input$past_percentage_min_dropdown),
+      Y_trail_profit = as.numeric(input$Y_trail_profit),
+      Y_stop_loss = as.numeric(input$Y_stop_loss),
+      Y_trail_fixed_profit = as.numeric(input$Y_trail_fixed_profit),
+      use_avg_price = input$use_avg_price,
+      session = session
+    )
+  })
+  
+  output$result_chart <- renderPlot({
+    result <- simulation_result()
+    if (!is.null(result)) {
+      result[[2]]
+    }
+  })
+  
+  # output$transactions_table <- renderTable({
+  #   result <- simulation_result()
+  #   if (!is.null(result)) {
+  #     result[[1]]
+  #   }
+  # })
+  
+  output$transactions_cumulative_result_tsl <- renderTable({
+    result <- simulation_result()
+    if (!is.null(result)) {
+      # Assuming the last transaction is in the last row of the first element of result (result[[1]])
+      last_transaction <- tail(result[[1]], 1)
+      last_transaction
+    }
+  })
+  
+  output$transactions_cumulative_result_paragraph <- renderText({
+    result <- simulation_result()
+    if (!is.null(result)) {
+      # Assuming the cumulative result comes from the last row of the first element of result
+      last_transaction <- tail(result[[1]], 1)
+      
+      # Create a paragraph based on the last transaction (you can adjust this part based on your data structure)
+      cumulative_result <- last_transaction$cumulative_result_tsl  # Adjust to match your data column name
+      paste("Skumulowamny zysk strategii: ", cumulative_result, "%")
+    } else {
+      "Brak danyc / Dane są obliczane"
+    }
+  })
+}
+
+shinyApp(ui, server)
+
